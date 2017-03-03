@@ -31,13 +31,15 @@ import multiprocessing
 from StringIO import StringIO
 from pg8000 import DBAPI
 
+SPARK_SQL_BIN = ''
+
 # A scratch directory on your filesystem
 LOCAL_TMP_DIR = "/tmp"
 
 ### Benchmark Queries ###
 TMP_TABLE = "result"
 TMP_TABLE_CACHED = "result_cached"
-CLEAN_QUERY = "DROP TABLE %s;" % TMP_TABLE
+CLEAN_QUERY = "DROP TABLE IF EXISTS %s;" % TMP_TABLE
 
 # TODO: Factor this out into a separate file
 QUERY_1a_HQL = "SELECT pageURL, pageRank FROM rankings WHERE pageRank > 1000"
@@ -299,7 +301,7 @@ def run_shark_benchmark(opts):
   remote_tmp_file = "/mnt/%s_out" % prefix
   remote_query_file = "/mnt/%s" % query_file_name
 
-  runner = "/root/shark/bin/shark-withinfo"
+  runner = SPARK_SQL_BIN
 
   print "Getting Slave List"
   scp_from(opts.shark_host, opts.shark_identity_file, "root",

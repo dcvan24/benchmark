@@ -29,6 +29,11 @@ import pg8000.errors
 
 # A scratch directory on your filesystem
 LOCAL_TMP_DIR = "/tmp"
+HADOOP_BIN = '/home/hadoop/hadoop/bin/hadoop'
+HADOOP_HOME = ''
+HIVE_BIN = ''
+HIVE_HOME = ''
+
 
 # Maps cluster sizes to S3 path prefixes
 SCALE_FACTOR_MAP = {
@@ -174,43 +179,40 @@ def add_aws_credentials(remote_host, remote_user, identity_file,
   out.close()
   scp_to(remote_host, identity_file, remote_user, local_xml, remote_xml_file)
 
-def prepare_shark_dataset(opts):
-  def ssh_shark(command):
+def prepare_sparksql_dataset(opts):
+  def ssh_sparksql(command):
     command = "source /root/.bash_profile; %s" % command
     ssh(opts.shark_host, "root", opts.shark_identity_file, command)
 
   if not opts.skip_s3_import:
     print "=== IMPORTING BENCHMARK DATA FROM S3 ==="
     try:
-      ssh_shark("/root/ephemeral-hdfs/bin/hdfs dfs -mkdir /user/shark/benchmark")
+      ssh_sparksql("%s dfs -mkdir /user/shark/benchmark"%HADOOP_BIN)
     except Exception:
       pass # Folder may already exist
 
     add_aws_credentials(opts.shark_host, "root", opts.shark_identity_file,
-        "/root/mapreduce/conf/core-site.xml", opts.aws_key_id, opts.aws_key)
+        "%s/etc/hadoop/core-site.xml"%HADOOP_HOME, opts.aws_key_id, opts.aws_key)
 
-    ssh_shark("/root/mapreduce/bin/start-mapred.sh")
+    ssh_sparksql(
+      "%s hadoop distcp "
+      "s3n://big-data-benchmark/pavlo/%s/%s/rankings/ "
+      "/user/shark/benchmark/rankings/" % (HADOOP_BIN, opts.file_format, opts.data_prefix))
 
-    ssh_shark(
-      "/root/mapreduce/bin/hadoop distcp " \
-      "s3n://big-data-benchmark/pavlo/%s/%s/rankings/ " \
-      "/user/shark/benchmark/rankings/" % (opts.file_format, opts.data_prefix))
+    ssh_sparksql(
+      "%s distcp "
+      "s3n://big-data-benchmark/pavlo/%s/%s/uservisits/ "
+      "/user/shark/benchmark/uservisits/" % (HADOOP_BIN, opts.file_format, opts.data_prefix))
 
-    ssh_shark(
-      "/root/mapreduce/bin/hadoop distcp " \
-      "s3n://big-data-benchmark/pavlo/%s/%s/uservisits/ " \
-      "/user/shark/benchmark/uservisits/" % (
-        opts.file_format, opts.data_prefix))
-
-    ssh_shark(
-      "/root/mapreduce/bin/hadoop distcp " \
-      "s3n://big-data-benchmark/pavlo/%s/%s/crawl/ " \
-      "/user/shark/benchmark/crawl/" % (opts.file_format, opts.data_prefix))
+    ssh_sparksql(
+      "%s distcp " \
+      "s3n://big-data-benchmark/pavlo/%s/%s/crawl/ "
+      "/user/shark/benchmark/crawl/" % (HADOOP_BIN, opts.file_format, opts.data_prefix))
 
     # Scratch table used for JVM warmup
-    ssh_shark(
-      "/root/mapreduce/bin/hadoop distcp /user/shark/benchmark/rankings " \
-      "/user/shark/benchmark/scratch"
+    ssh_sparksql(
+      "%s distcp /user/shark/benchmark/rankings "
+      "/user/shark/benchmark/scratch"%HADOOP_BIN
     )
 
   print "=== CREATING HIVE TABLES FOR BENCHMARK ==="
@@ -235,44 +237,35 @@ def prepare_shark_dataset(opts):
     </configuration>
     '''.replace("NAMENODE", opts.shark_host).replace('\n', '')
 
-  ssh_shark('echo "%s" > ~/ephemeral-hdfs/conf/hive-site.xml' % hive_site)
+  ssh_sparksql('echo "%s" > %s/conf/hive-site.xml'%(HIVE_HOME, hive_site))
 
   scp_to(opts.shark_host, opts.shark_identity_file, "root", "udf/url_count.py",
       "/root/url_count.py")
-  ssh_shark("/root/spark-ec2/copy-dir /root/url_count.py")
+  ssh_sparksql("/root/spark-ec2/copy-dir /root/url_count.py")
 
-  ssh_shark("""
-            mv shark shark-back;
-            git clone https://github.com/ahirreddy/shark.git -b branch-0.8;
-            cp shark-back/conf/shark-env.sh shark/conf/shark-env.sh;
-            cd shark;
-            sbt/sbt assembly;
-            /root/spark-ec2/copy-dir --delete /root/shark;
-            """)
+  ssh_sparksql(
+    "%s -e \"DROP TABLE IF EXISTS rankings; "
+    "CREATE EXTERNAL TABLE rankings (pageURL STRING, pageRank INT, "
+    "avgDuration INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" "
+    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/rankings\\\";\""%HIVE_BIN)
 
-  ssh_shark(
-    "/root/shark/bin/shark -e \"DROP TABLE IF EXISTS rankings; " \
-    "CREATE EXTERNAL TABLE rankings (pageURL STRING, pageRank INT, " \
-    "avgDuration INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" " \
-    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/rankings\\\";\"")
+  ssh_sparksql(
+    "%s -e \"DROP TABLE IF EXISTS scratch; "
+    "CREATE EXTERNAL TABLE scratch (pageURL STRING, pageRank INT, "
+    "avgDuration INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" "
+    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/scratch\\\";\""%HIVE_BIN)
 
-  ssh_shark(
-    "/root/shark/bin/shark -e \"DROP TABLE IF EXISTS scratch; " \
-    "CREATE EXTERNAL TABLE scratch (pageURL STRING, pageRank INT, " \
-    "avgDuration INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" " \
-    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/scratch\\\";\"")
+  ssh_sparksql(
+    "%s -e \"DROP TABLE IF EXISTS uservisits; "
+    "CREATE EXTERNAL TABLE uservisits (sourceIP STRING,destURL STRING,"
+    "visitDate STRING,adRevenue DOUBLE,userAgent STRING,countryCode STRING,"
+    "languageCode STRING,searchWord STRING,duration INT ) "
+    "ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" "
+    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/uservisits\\\";\""%HIVE_BIN)
 
-  ssh_shark(
-    "/root/shark/bin/shark -e \"DROP TABLE IF EXISTS uservisits; " \
-    "CREATE EXTERNAL TABLE uservisits (sourceIP STRING,destURL STRING," \
-    "visitDate STRING,adRevenue DOUBLE,userAgent STRING,countryCode STRING," \
-    "languageCode STRING,searchWord STRING,duration INT ) " \
-    "ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" " \
-    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/uservisits\\\";\"")
-
-  ssh_shark("/root/shark/bin/shark -e \"DROP TABLE IF EXISTS documents; " \
-    "CREATE EXTERNAL TABLE documents (line STRING) STORED AS TEXTFILE " \
-    "LOCATION \\\"/user/shark/benchmark/crawl\\\";\"")
+  ssh_sparksql("%s -e \"DROP TABLE IF EXISTS documents; "
+    "CREATE EXTERNAL TABLE documents (line STRING) STORED AS TEXTFILE "
+    "LOCATION \\\"/user/shark/benchmark/crawl\\\";\""%HIVE_BIN)
 
   print "=== FINISHED CREATING BENCHMARK DATA ==="
 
@@ -591,7 +584,7 @@ def main():
   if opts.impala:
     prepare_impala_dataset(opts)
   if opts.shark:
-    prepare_shark_dataset(opts)
+    prepare_sparksql_dataset(opts)
   if opts.redshift:
     prepare_redshift_dataset(opts)
   if opts.hive:
