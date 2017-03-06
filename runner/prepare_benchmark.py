@@ -29,10 +29,12 @@ import pg8000.errors
 
 # A scratch directory on your filesystem
 LOCAL_TMP_DIR = "/tmp"
-HADOOP_BIN = '/home/hadoop/hadoop/bin/hadoop'
-HADOOP_HOME = ''
-HIVE_BIN = ''
-HIVE_HOME = ''
+SPARK_HOME = '/opt/spark'
+HADOOP_HOME = '/opt/hadoop'
+HADOOP_BIN = '{}/bin'.format(HADOOP_HOME)
+HIVE_HOME = '/opt/hive'
+BEELINE_BIN = '{}/bin/beeline'.format(SPARK_HOME)
+
 
 
 # Maps cluster sizes to S3 path prefixes
@@ -214,6 +216,9 @@ def prepare_sparksql_dataset(opts):
       "%s distcp /user/shark/benchmark/rankings "
       "/user/shark/benchmark/scratch"%HADOOP_BIN
     )
+  # copy conf files to SPARK_HOME from Hadoop
+  ssh_sparksql('cp -a {}/etc/hadoop/core-site.xml {}/conf'.format(HADOOP_HOME, SPARK_HOME))
+  ssh_sparksql('cp -a {}/etc/hadoop/hdfs-site.xml {}/conf'.format(HADOOP_HOME, SPARK_HOME))
 
   print "=== CREATING HIVE TABLES FOR BENCHMARK ==="
   hive_site = '''
@@ -234,38 +239,62 @@ def prepare_sparksql_dataset(opts):
         <name>mapreduce.framework.name</name>
         <value>NONE</value>
       </property>
+      <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:mysql://NAMENODE/metastore?createDatabaseIfNotExist=true</value>
+        <description>metadata is stored in a MySQL server</description>
+       </property>
+       <property>
+          <name>javax.jdo.option.ConnectionDriverName</name>
+          <value>com.mysql.jdbc.Driver</value>
+          <description>MySQL JDBC driver class</description>
+       </property>
+       <property>
+          <name>javax.jdo.option.ConnectionUserName</name>
+          <value>hive</value>
+          <description>user name for connecting to mysql server</description>
+       </property>
+       <property>
+          <name>javax.jdo.option.ConnectionPassword</name>
+          <value>hive</value>
+          <description>password for connecting to mysql server</description>
+       </property>
+       <property>
+          <name>fs.hdfs.impl.disable.cache</name>
+          <value>true</value>
+       </property>
     </configuration>
     '''.replace("NAMENODE", opts.shark_host).replace('\n', '')
 
-  ssh_sparksql('echo "%s" > %s/conf/hive-site.xml'%(HIVE_HOME, hive_site))
+  ssh_sparksql('echo "{}" > {}/conf/hive-site.xml'.format(hive_site, SPARK_HOME))
 
   scp_to(opts.shark_host, opts.shark_identity_file, "root", "udf/url_count.py",
       "/root/url_count.py")
   ssh_sparksql("/root/spark-ec2/copy-dir /root/url_count.py")
 
   ssh_sparksql(
-    "%s -e \"DROP TABLE IF EXISTS rankings; "
+    "{} -u \"jdbc:hive2://{}:10000/default\" -e \"DROP TABLE IF EXISTS rankings; "
     "CREATE EXTERNAL TABLE rankings (pageURL STRING, pageRank INT, "
     "avgDuration INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" "
-    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/rankings\\\";\""%HIVE_BIN)
+    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/rankings\\\";\"".format(BEELINE_BIN, opts.shark_host))
 
   ssh_sparksql(
-    "%s -e \"DROP TABLE IF EXISTS scratch; "
+    "{} -u \"jdbc:hive2://{}:10000/default\"  -e \"DROP TABLE IF EXISTS scratch; "
     "CREATE EXTERNAL TABLE scratch (pageURL STRING, pageRank INT, "
     "avgDuration INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" "
-    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/scratch\\\";\""%HIVE_BIN)
+    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/scratch\\\";\"".format(BEELINE_BIN, opts.shark_host))
 
   ssh_sparksql(
-    "%s -e \"DROP TABLE IF EXISTS uservisits; "
+    "{} -u \"jdbc:hive2://{}:10000/default\"  -e \"DROP TABLE IF EXISTS uservisits; "
     "CREATE EXTERNAL TABLE uservisits (sourceIP STRING,destURL STRING,"
     "visitDate STRING,adRevenue DOUBLE,userAgent STRING,countryCode STRING,"
     "languageCode STRING,searchWord STRING,duration INT ) "
     "ROW FORMAT DELIMITED FIELDS TERMINATED BY \\\",\\\" "
-    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/uservisits\\\";\""%HIVE_BIN)
+    "STORED AS TEXTFILE LOCATION \\\"/user/shark/benchmark/uservisits\\\";\"".format(BEELINE_BIN, opts.shark_host))
 
-  ssh_sparksql("%s -e \"DROP TABLE IF EXISTS documents; "
+  ssh_sparksql("{} -u \"jdbc:hive2://{}:10000/default\"  -e \"DROP TABLE IF EXISTS documents; "
     "CREATE EXTERNAL TABLE documents (line STRING) STORED AS TEXTFILE "
-    "LOCATION \\\"/user/shark/benchmark/crawl\\\";\""%HIVE_BIN)
+    "LOCATION \\\"/user/shark/benchmark/crawl\\\";\"".format(BEELINE_BIN, opts.shark_host))
 
   print "=== FINISHED CREATING BENCHMARK DATA ==="
 
