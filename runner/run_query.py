@@ -46,7 +46,7 @@ QUERY_1a_HQL = "SELECT pageURL, pageRank FROM rankings WHERE pageRank > 1000"
 QUERY_1b_HQL = QUERY_1a_HQL.replace("1000", "100")
 QUERY_1c_HQL = QUERY_1a_HQL.replace("1000", "10")
 
-QUERY_2a_HQL = "SELECT SUBSTR(sourceIP, 1, 8), SUM(adRevenue) FROM " \
+QUERY_2a_HQL = "SELECT SUBSTR(sourceIP, 1, 8) AS sourceIp, SUM(adRevenue) FROM " \
                  "uservisits GROUP BY SUBSTR(sourceIP, 1, 8)"
 QUERY_2b_HQL = QUERY_2a_HQL.replace("8", "10")
 QUERY_2c_HQL = QUERY_2a_HQL.replace("8", "12")
@@ -369,8 +369,7 @@ def run_shark_benchmark(opts):
     "%s -e '%s' > %s 2>&1\n" % (runner, query_list, remote_tmp_file))
 
   query_file.write(
-      "cat %s | grep Time | grep -v INFO |grep -v MapReduce >> %s\n" % (
-        remote_tmp_file, remote_result_file))
+    "cat %s | grep -i 'seconds' | awk -F'[ (]' '{print $5}' > %s\n"%(remote_tmp_file, remote_result_file))
 
   query_file.close()
 
@@ -394,7 +393,7 @@ def run_shark_benchmark(opts):
     local_results_file = os.path.join(LOCAL_TMP_DIR, "%s_results" % prefix)
     scp_from(opts.shark_host, opts.shark_identity_file, "root",
         "/mnt/%s_results" % prefix, local_results_file)
-    content = open(local_results_file).readlines()
+    content = map(lambda x: x.strip('\n'), open(local_results_file).readlines())
     all_times = map(lambda x: float(x.split(": ")[1].split(" ")[0]), content)
 
     if '4' in opts.query_num:
@@ -624,8 +623,7 @@ def run_hive_benchmark(opts):
     local_results_file = os.path.join(LOCAL_TMP_DIR, "%s_results" % prefix)
     scp_from(opts.hive_host, opts.hive_identity_file, "root",
         "/mnt/%s_results" % prefix, local_results_file)
-    content = open(local_results_file).readlines()
-    all_times = map(lambda x: float(x.split(": ")[1].split(" ")[0]), content)
+    all_times = map(lambda x: float(x), open(local_results_file).readlines())
 
     if '4' in opts.query_num:
       query_times = all_times[-4:]
